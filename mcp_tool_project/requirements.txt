@@ -1,0 +1,11 @@
+# Neo4j driver
+neo4j>=5.0.0,<6.0.0
+
+# For text processing
+spacy>=3.0.0,<4.0.0
+
+# To download a model (run this command once after installing spacy):
+# python -m spacy download en_core_web_sm
+
+# Add other dependencies as needed
+```
