@@ -159,3 +159,5 @@ if __name__ == '__main__':
     print("\n--- Note ---")
     print("The above entity extraction is a basic demonstration using spaCy's default NER.")
     print("For research papers, custom training or more advanced NLP techniques (e.g., SciSpaCy, specific relation extraction models) would be beneficial.")
+
+```
