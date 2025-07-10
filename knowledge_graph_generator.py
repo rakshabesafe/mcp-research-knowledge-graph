@@ -231,4 +231,3 @@ if __name__ == '__main__':
     finally:
         if kgg:
             kgg.close_connection()
-```
