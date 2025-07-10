@@ -1,116 +1,162 @@
-# MCP Tool for Research Paper Knowledge Graphs
+# Research Paper Knowledge Graph Processor (FastMCP Edition)
 
-This tool processes details of research papers and creates a knowledge graph in a Neo4j database based on a defined ontology. It is structured to allow modular components for text processing and graph generation, aligning with a Model Context Project (MCP) concept.
+This project provides a FastMCP (Model Context Protocol) server with a tool to process research paper details and create/update a knowledge graph in a Neo4j database.
 
-## Ontology Overview
+## Overview
 
-The knowledge graph aims to capture the following core concepts and relationships:
+The core of this project is a FastMCP server that exposes a tool named `ProcessPaperToKG`. This tool accepts structured data about a research paper (title, DOI, authors, abstract, etc.), processes it (including NLP on the abstract/text via spaCy if available), and then populates a Neo4j graph database according to a defined ontology.
+
+## Ontology
+
+The knowledge graph aims to capture:
 
 **Core Concepts:**
 *   **ResearchPaper:** Title, Abstract, Publication Date, DOI, Keywords, Full Text, Venue.
 *   **Author:** Name, Affiliation, OrcID.
-*   **Topic:** Name/Keywords, Subtopics.
+*   **Topic:** Name/Keywords.
 *   **Institution:** Name, Location.
 *   **Method:** Name, Description.
 *   **Venue:** Name (e.g., conference, journal).
 
-**Relationships:**
-*   `HAS_AUTHOR` (ResearchPaper -> Author) / `AUTHORED_BY` (Author -> ResearchPaper)
-*   `PUBLISHED_IN` (ResearchPaper -> Venue)
-*   `FOCUSES_ON` (ResearchPaper -> Topic)
-*   `EMPLOYS_METHOD` (ResearchPaper -> Method)
-*   `AFFILIATED_WITH` (Author -> Institution)
-*   `CITES` (ResearchPaper -> ResearchPaper) / `REFERENCED_BY` (ResearchPaper <- ResearchPaper)
-*   `COAUTHORED_WITH_ON` (Author -> Author, on a specific paper)
-*   *(Future: `HAS_RESEARCH_QUESTION`, `PRODUCES_DATA/MODEL/SOFTWARE`)*
+**Relationships:** (Examples)
+*   `HAS_AUTHOR`, `PUBLISHED_IN`, `FOCUSES_ON`, `EMPLOYS_METHOD`, `AFFILIATED_WITH`, `CITES`, `COAUTHORED_WITH_ON`.
 
 ## Prerequisites
 
-*   Python 3.7+
+*   Python 3.8+ (FastMCP and Pydantic v2 benefit from newer Python versions)
 *   Access to a running Neo4j instance (Version 4.x or 5.x recommended).
-*   For advanced text processing features: `spaCy` library and a model (e.g., `en_core_web_sm`).
+*   `uv` (recommended by FastMCP for environment management, especially for `fastmcp install`) or `pip`.
+*   For text processing features: `spaCy` library and a model (e.g., `en_core_web_sm`).
 
 ## Setup
 
-1.  **Clone the repository (or ensure all files are in the root project directory):**
+1.  **Clone the repository (or ensure all files are in the root project directory).**
+
+2.  **Create a virtual environment (recommended):**
     ```bash
-    # If this were a git repo:
-    # git clone <repository_url>
-    # cd <repository_name>
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
     ```
 
-2.  **Install dependencies:**
+3.  **Install dependencies:**
     Navigate to the project root directory and run:
     ```bash
     pip install -r requirements.txt
     ```
-    If you intend to use the NLP features for entity extraction from text, you also need to download a spaCy model (this is done once):
+    If you intend to use the NLP features for entity extraction from text, you also need to download a spaCy model (this is done once after installing spaCy):
     ```bash
     python -m spacy download en_core_web_sm
     ```
 
-3.  **Configure Neo4j Connection:**
-    The tool can be configured to connect to your Neo4j instance via command-line arguments or environment variables.
+4.  **Configure Neo4j Connection:**
+    The FastMCP server requires Neo4j connection details, which are read from environment variables at startup:
+    *   `NEO4J_URI`: e.g., `bolt://localhost:7687` (Default)
+    *   `NEO4J_USER`: e.g., `neo4j` (Default)
+    *   `NEO4J_PASSWORD`: Your Neo4j password (Required, e.g., `your_secure_password`)
 
-    *   **Environment Variables (Recommended for security):**
-        *   `NEO4J_URI`: e.g., `bolt://localhost:7687`
-        *   `NEO4J_USERNAME`: e.g., `neo4j`
-        *   `NEO4J_PASSWORD`: Your Neo4j password
-    *   **Command-line Arguments:**
-        You can override these by passing `--uri`, `--user`, and `--password` when running the tool.
+    Set these environment variables in your shell before running the server. For example:
+    ```bash
+    export NEO4J_URI="bolt://localhost:7687"
+    export NEO4J_USER="neo4j"
+    export NEO4J_PASSWORD="yourpassword"
+    ```
 
-## Usage
+## Running the FastMCP Server
 
-The main command-line interface is `mcp_tool.py`. It takes research paper details as arguments and uses the `KnowledgeGraphGenerator` to process the data.
+The server is defined in `fastmcp_server.py` and the FastMCP instance is named `mcp_server`.
 
-**Basic Example:**
+You can run the server using the `fastmcp` CLI (recommended):
 
 ```bash
-python mcp_tool.py \
-    --title "A Study on Knowledge Graph Construction from Scientific Texts" \
-    --doi "10.xxxx/example.doi.123" \
-    --abstract "This paper explores methods for automatically building knowledge graphs. Research at Example University." \
-    --pubdate "2024-01-15" \
-    --authors "Dr. Eva Core <0000-0001-2345-0001>" "Dr. Max Headroom" \
-    --author-affiliations "Example University" "Some Other University" \
-    --keywords "Knowledge Graphs" "NLP" "Science" "Ontology" \
-    --venue "Journal of Advanced Scientific Computing" \
-    # Optional: --uri "bolt://your_neo4j_host:7687" --user "your_user" --password "your_pass"
+fastmcp run fastmcp_server.py:mcp_server
 ```
 
-**Required Arguments:**
-*   `--title`: Title of the paper.
-*   `--doi`: Digital Object Identifier for the paper.
+This will typically start the server using `stdio` transport. To run it with HTTP transport (e.g., for testing with tools like `curl` or other HTTP-based MCP clients):
 
-**Optional Arguments for Paper Details:**
-*   `--abstract`: Paper's abstract. (Used by `text_processor.py`).
-*   `--pubdate`: Publication date (YYYY-MM-DD).
-*   `--authors`: Space-separated list of authors.
-    *   Format: `"Full Name"` or `"Full Name <ORCID>"`.
-*   `--author-affiliations`: Space-separated list of affiliations, one per author in the order authors are listed. Use "None" or an empty string for authors without a listed affiliation.
-*   `--keywords`: Space-separated list of keywords (these become `Topic` nodes).
-*   `--venue`: Name of the journal or conference.
-*   `--fulltext`: Path to a file containing the full text of the paper (optional, for more detailed processing by `text_processor.py`).
+```bash
+fastmcp run fastmcp_server.py:mcp_server --transport http --port 8000
+```
 
-## Project Structure & Modules
+Alternatively, you can run the server directly using Python for basic stdio operation:
+```bash
+python fastmcp_server.py
+```
+(Make sure environment variables for Neo4j are set.)
 
-*   **`mcp_tool.py`**: The main command-line interface (CLI) script. It parses arguments and passes them to the `KnowledgeGraphGenerator`.
-*   **`knowledge_graph_generator.py`**: Contains the `KnowledgeGraphGenerator` class, which encapsulates the core logic for processing paper data and building the knowledge graph. It utilizes `neo4j_handler.py` for database interactions and `text_processor.py` for NLP tasks. This module is designed to be potentially usable as a library component.
-*   **`neo4j_handler.py`**: Contains the `Neo4jGraph` class for all interactions with the Neo4j database (CRUD operations for nodes and relationships based on the defined ontology).
-*   **`text_processor.py`**: Handles Natural Language Processing (NLP) tasks. It aims to extract entities (like methods, institutions, additional topics) and potentially relations from the paper's text (abstract or full text). Currently uses `spaCy` for basic NER if available, with fallbacks. This module is designed to be replaceable with other NLP tools or frameworks (e.g., a future FastMCP component).
+## Interacting with the `ProcessPaperToKG` Tool
+
+Once the server is running, MCP clients can call the `ProcessPaperToKG` tool. The tool expects a JSON object matching the `PaperDetails` Pydantic model.
+
+**Example Input for `ProcessPaperToKG` tool:**
+```json
+{
+  "title": "A Study on Knowledge Graph Construction",
+  "doi": "10.xxxx/example.doi.123",
+  "abstract": "This paper explores methods for automatically building knowledge graphs. Research at Example University.",
+  "publication_date": "2024-01-15",
+  "authors": [
+    {"name": "Dr. Eva Core", "orcid": "0000-0001-2345-0001", "affiliation": "Example University"},
+    {"name": "Dr. Max Headroom", "affiliation": "Some Other University"}
+  ],
+  "keywords": ["Knowledge Graphs", "NLP", "Science"],
+  "venue_name": "Journal of Advanced Scientific Computing",
+  "full_text": null
+}
+```
+
+**How to call the tool (Conceptual):**
+
+*   **Using a Python FastMCP Client (e.g., in a separate `client_example.py`):**
+    ```python
+    import asyncio
+    from fastmcp import Client
+
+    async def main():
+        # Assumes server is running via stdio from `python fastmcp_server.py`
+        # or `fastmcp run fastmcp_server.py:mcp_server` (stdio is default)
+        # client = Client("fastmcp_server.py:mcp_server")
+        # If server is running on HTTP:
+        # client = Client("http://localhost:8000/mcp/") # Adjust URL if path is different
+
+        # For stdio, you might point to the process directly if running `python fastmcp_server.py`
+        # This part can be tricky with stdio and might require specific client setup.
+        # The most robust way is often HTTP or using FastMCP's dev/install features for specific clients.
+
+        # This example assumes you have a way to target the running server.
+        # For local testing with stdio, often `Client(mcp_server_object)` is used if client and server are in the same process.
+        # For separate processes, a transport like HTTP is easier to target.
+
+        # Let's assume an HTTP client for clarity:
+        client = Client("http://localhost:8000/mcp/") # if server run with --transport http
+
+        paper_payload = {
+            "title": "Test Paper via Client", "doi": "10.client/test001",
+            "abstract": "Testing FastMCP tool call with a client. Mentions machine learning.",
+            "authors": [{"name": "Client User"}]
+        }
+        async with client:
+            result = await client.call_tool("ProcessPaperToKG", paper_payload)
+            print(result)
+
+    if __name__ == "__main__":
+        # asyncio.run(main()) # Uncomment to run if you have a client setup
+        print("Client example: Run the server first, then adapt and run this client.")
+    ```
+
+*   **Using `curl` (if server is on HTTP, e.g., `http://localhost:8000/mcp/`):**
+    The exact `curl` command depends on how FastMCP exposes tools over HTTP and the MCP specification for tool calls via HTTP. This usually involves a POST request with a specific JSON structure for the tool call. Refer to MCP protocol specs for HTTP transport details.
+
+## Project Structure
+
+*   **`fastmcp_server.py`**: Defines the FastMCP server, Pydantic data models, the `lifespan` manager for Neo4j, and the main `ProcessPaperToKG` tool.
+*   **`neo4j_handler.py`**: Contains the `Neo4jGraph` class for all Neo4j database interactions.
+*   **`text_processor.py`**: Handles NLP tasks (entity extraction from text using spaCy).
 *   **`requirements.txt`**: Lists Python package dependencies.
 *   **`README.md`**: This file.
 
-This structure promotes modularity:
-*   The CLI is separate from the core graph generation logic.
-*   The NLP component is separate and can be evolved or replaced.
-*   The Neo4j interaction layer is also distinct.
-
 ## Future Development
-*   **Advanced NLP Integration:** Enhance `text_processor.py` with more sophisticated NLP models (e.g., SciSpaCy, transformer-based models) for better entity recognition (methods, tools, datasets, research questions) and relation extraction from scientific text.
-*   **FastMCP Integration:** If FastMCP or a similar framework becomes available, `text_processor.py` could be adapted or replaced to integrate with it.
-*   **Input from Structured Files:** Support for input from formats like JSON, BibTeX, or XML (e.g., JATS).
-*   **Batch Processing:** Allow processing of multiple papers from a directory or a manifest file.
-*   **Enhanced Relation Extraction:** Move beyond entity spotting to more robustly extract relationships defined in the ontology directly from text.
-*   **Configuration File:** Support for managing settings (e.g., Neo4j credentials, NLP model choices) via a configuration file.
+*   Develop a dedicated, simple Python client CLI for easier testing and interaction with the `ProcessPaperToKG` tool.
+*   Enhance `text_processor.py` with more advanced NLP models.
+*   Support for batch processing or input from other sources (e.g., Zotero, arXiv).
+*   Expand the ontology and extraction capabilities.
 ```
