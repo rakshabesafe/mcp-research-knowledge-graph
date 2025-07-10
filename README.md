@@ -77,11 +77,18 @@ This will typically start the server using `stdio` transport. To run it with HTT
 fastmcp run fastmcp_server.py:mcp_server --transport http --port 8000
 ```
 
-Alternatively, you can run the server directly using Python for basic stdio operation:
+To run with Server-Sent Events (SSE) transport:
+```bash
+fastmcp run fastmcp_server.py:mcp_server --transport sse # Default port for SSE might vary or be configured
+```
+
+Alternatively, you can run the server directly using Python for basic stdio operation (less flexible for choosing transport):
 ```bash
 python fastmcp_server.py
 ```
 (Make sure environment variables for Neo4j are set.)
+
+FastMCP supports `stdio` (default for `python ...` or `fastmcp run ...` without `--transport`), `http`, and `sse` transports. Using the `fastmcp run` command with the `--transport` flag is the recommended way to specify the desired transport.
 
 ## Interacting with the `ProcessPaperToKG` Tool
 
