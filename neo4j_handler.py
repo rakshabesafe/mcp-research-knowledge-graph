@@ -321,5 +321,4 @@ if __name__ == '__main__':
     #     """
     #     self._run_query(query, {"paper_id": paper_identifier, "node_id": node_identifier})
     # This is a more generic way to handle some of the other relationships if the other node type is simple.
-
 ```
