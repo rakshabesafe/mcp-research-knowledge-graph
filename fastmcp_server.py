@@ -312,4 +312,3 @@ if __name__ == "__main__":
         print("\nFastMCP server (V2 Ontology) shutting down...")
     except Exception as e:
         print(f"FastMCP server (V2 Ontology) failed to start or run: {e}")
-```
