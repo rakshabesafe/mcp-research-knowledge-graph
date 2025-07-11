@@ -10,34 +10,80 @@ The core of this project is a FastMCP server that exposes a tool named `ProcessP
 
 The knowledge graph is built according to the following ontology:
 
-**Core Entities (Node Labels):**
-*   **`Paper`**: Represents a research publication.
-    *   *Properties:* `title`, `abstract`, `publication_date`, `doi` (unique ID), `keywords` (list), `full_text_link` (URL).
-*   **`Author`**: An individual who contributed to a paper.
-    *   *Properties:* `name`, `orcid` (unique ID, optional), `email` (optional).
-*   **`Affiliation`**: An institution or organization an author is associated with.
-    *   *Properties:* `name` (unique ID), `location` (optional).
-*   **`PublicationVenue`**: The entity where the paper is published (e.g., journal, conference).
-    *   *Properties:* `name` (unique ID), `issn_isbn` (optional), `publisher` (optional).
-*   **`ResearchTopic`**: The subject area or keyword associated with a paper.
-    *   *Properties:* `name` (unique ID).
-*   **`Method`**: A specific technique, algorithm, or methodology used.
-    *   *Properties:* `name` (unique ID), `description` (optional).
-*   **`Dataset`**: A collection of data used or produced.
-    *   *Properties:* `name` (unique ID), `description` (optional), `url` (optional).
-*   **`Funder`**: An organization that funded the research.
-    *   *Properties:* `name` (unique ID).
+**Core Entities (Node Labels) & Their Properties:**
+
+*   **`Paper`**: A research publication.
+    *   `doi` (string, Unique ID): Digital Object Identifier.
+    *   `title` (string): Title of the paper.
+    *   `abstract` (string, optional): Summary of the paper.
+    *   `publication_date` (string, optional): e.g., "YYYY-MM-DD".
+    *   `keywords` (list of strings, optional): Keywords assigned to the paper (these become `ResearchTopic` nodes).
+    *   `full_text_link` (string, optional): URL to the full text.
+*   **`Author`**: An individual contributor.
+    *   `name` (string): Full name. (Primary key if ORCID is absent).
+    *   `orcid` (string, optional, Unique ID if present): Open Researcher and Contributor ID.
+    *   `email` (string, optional): Contact email.
+*   **`Affiliation`**: An institution/organization an author is associated with.
+    *   `name` (string, Unique ID): Name of the affiliation.
+    *   `location` (string, optional): Geographical location.
+*   **`PublicationVenue`**: Where the paper is published.
+    *   `name` (string, Unique ID): Name of the journal or conference.
+    *   `issn_isbn` (string, optional): ISSN or ISBN.
+    *   `publisher` (string, optional): Publishing house.
+*   **`ResearchTopic`**: A high-level subject area or keyword. (Initially populated from `Paper.keywords`).
+    *   `name` (string, Unique ID): Name of the topic.
+*   **`Method`**: A specific technique or methodology.
+    *   `name` (string, Unique ID): Name of the method.
+    *   `description` (string, optional): Brief description.
+*   **`Dataset`**: Data used or produced by research.
+    *   `name` (string, Unique ID): Name of the dataset.
+    *   `description` (string, optional): Description.
+    *   `url` (string, optional): Link to the dataset.
+*   **`Funder`**: Organization funding the research.
+    *   `name` (string, Unique ID): Name of the funder.
+*   **`Objective`**: A research goal of a paper.
+    *   `description` (string, Unique ID): Text describing the objective.
+*   **`Hypothesis`**: A specific hypothesis tested in a paper.
+    *   `description` (string, Unique ID): Text describing the hypothesis.
+*   **`Concept`**: A granular unit of knowledge (e.g., algorithm, principle).
+    *   `name` (string, Unique ID): Name of the concept.
+    *   `definition` (string, optional): Short description.
+    *   `first_mentioned_doi` (string, optional): DOI of the seminal paper introducing this concept.
+*   **`ResearchProblem`**: A problem/question the paper aims to solve.
+    *   `description` (string, Unique ID): Statement of the problem.
+*   **`Limitation`**: A stated limitation of the research work.
+    *   `description` (string, Unique ID): Description of the limitation.
+*   **`FutureWork`**: A suggestion for future research.
+    *   `description` (string, Unique ID): Description of the future work.
 
 **Relationships (Edge Types):**
-*   `Paper` -[:HAS_AUTHOR]-> `Author` (Inverse: `Author` -[:AUTHORED_BY]-> `Paper`)
-*   `Author` -[:IS_AFFILIATED_WITH]-> `Affiliation`
-*   `Paper` -[:PUBLISHED_IN]-> `PublicationVenue`
-*   `Paper` -[:HAS_TOPIC]-> `ResearchTopic`
-*   `Paper` -[:USES_METHOD]-> `Method`
-*   `Paper` -[:USES_DATASET]-> `Dataset`
-*   `Paper` -[:IS_FUNDED_BY]-> `Funder`
-*   `Paper` -[:CITES]-> `Paper` (Inverse: `Paper` -[:REFERENCED_BY]-> `Paper`)
-*   `Author` -[:COAUTHORED_WITH_ON {paper_doi: "..."}]-> `Author` (Bidirectional for a specific paper)
+
+*   Paper-Centric Relationships:
+    *   `Paper` -[:HAS_AUTHOR]-> `Author` (Inverse: `Author` -[:AUTHORED_BY]-> `Paper`)
+    *   `Paper` -[:PUBLISHED_IN]-> `PublicationVenue`
+    *   `Paper` -[:HAS_TOPIC]-> `ResearchTopic` (Connects paper to its main keywords/topics)
+    *   `Paper` -[:USES_METHOD]-> `Method`
+    *   `Paper` -[:USES_DATASET]-> `Dataset`
+    *   `Paper` -[:IS_FUNDED_BY]-> `Funder`
+    *   `Paper` -[:CITES]-> `Paper` (Inverse: `Paper` -[:REFERENCED_BY]-> `Paper`)
+    *   `Paper` -[:HAS_OBJECTIVE]-> `Objective`
+    *   `Paper` -[:HAS_HYPOTHESIS]-> `Hypothesis`
+    *   `Paper` -[:INTRODUCES_CONCEPT]-> `Concept` (For seminal contributions)
+    *   `Paper` -[:MENTIONS_CONCEPT]-> `Concept` (For general discussion of concepts)
+    *   `Paper` -[:ADDRESSES]-> `ResearchProblem`
+    *   `Paper` -[:HAS_LIMITATION]-> `Limitation`
+    *   `Paper` -[:SUGGESTS]-> `FutureWork`
+*   Author-Centric Relationships:
+    *   `Author` -[:IS_AFFILIATED_WITH]-> `Affiliation`
+    *   `Author` -[:COAUTHORED_WITH_ON {paper_doi: "..."}]-> `Author` (Bidirectional, paper-specific)
+*   Objective/Hypothesis/Method Inter-links:
+    *   `Objective` -[:IS_ADDRESSED_BY]-> `Hypothesis`
+    *   `Hypothesis` -[:IS_TESTED_BY]-> `Method`
+*   Conceptual Hierarchy & Links:
+    *   `Concept` -[:PART_OF]-> `ResearchTopic` (Groups concepts under broader topics)
+    *   `Concept` -[:IS_SUB_CONCEPT_OF]-> `Concept`
+    *   `Concept` -[:IS_PREREQUISITE_FOR]-> `Concept`
+    *   `Concept` -[:IS_RELATED_TO]-> `Concept`
 
 ## Prerequisites
 
@@ -142,44 +188,80 @@ For comprehensive details on all FastMCP configuration options, please refer to 
 
 Once the server is running, MCP clients can call the `ProcessPaperToKG` tool. The tool expects a JSON object matching the `PaperDetails` Pydantic model.
 
-**Example Input for `ProcessPaperToKG` tool (reflecting updated `PaperDetails` model):**
+**Example Input for `ProcessPaperToKG_V2` tool (reflecting expanded `PaperDetails` model):**
 ```json
 {
-  "title": "Advanced Techniques in Scientific KG Construction",
-  "doi": "10.sample/advkg2024",
-  "abstract": "This paper details advanced methods for building knowledge graphs from scientific literature, focusing on NLP and machine learning. Research funded by The Science Foundation and conducted at Premier University.",
-  "publication_date": "2024-07-15",
+  "title": "Comprehensive Analysis of AI in Scientific Discovery",
+  "doi": "10.synthetic/ai-discovery-2024",
+  "abstract": "This paper presents a comprehensive analysis of AI techniques applied to scientific discovery. It details several objectives, tests specific hypotheses using advanced machine learning methods, and introduces the 'DynamicConcept' framework. Key datasets like 'OpenSciData' were used. Funding was provided by 'FutureTech Grant Program'. Limitations include model interpretability, and future work suggests exploring hybrid AI models.",
+  "publication_date": "2024-08-01",
   "authors": [
     {
-      "name": "Dr. Jane Smith",
-      "orcid": "0000-0002-1825-0097",
-      "email": "jane.smith@example.com",
-      "affiliation_name": "Premier University",
-      "affiliation_location": "Tech City"
+      "name": "Dr. Alex Chen",
+      "orcid": "0000-0001-2345-6789",
+      "email": "alex.chen@innovate.edu",
+      "affiliation_name": "Innovation University",
+      "affiliation_location": "Tech Hub City"
     },
     {
-      "name": "Dr. John Doe",
-      "email": "john.doe@research.org",
-      "affiliation_name": "Independent Research Lab"
+      "name": "Dr. Maria Garcia",
+      "orcid": "0000-0002-9876-5432",
+      "email": "m.garcia@researchglobal.org",
+      "affiliation_name": "Global Research Institute"
     }
   ],
-  "keywords": ["Knowledge Representation", "Scientific Data", "Machine Learning"],
-  "full_text_link": "https://example.com/papers/advkg2024.pdf",
+  "keywords": ["Artificial Intelligence", "Scientific Discovery", "Machine Learning", "Knowledge Graphs"],
+  "full_text_link": "https://example.com/papers/ai-discovery-2024.pdf",
   "publication_venue": {
-    "name": "Journal of Semantic Web Technologies",
-    "issn_isbn": "1234-567X",
-    "publisher": "Tech Press"
+    "name": "Journal of AI in Science",
+    "issn_isbn": "2222-111X",
+    "publisher": "Academic Innovations Press"
   },
   "datasets": [
     {
-      "name": "SciGraph Dataset v2",
-      "description": "A benchmark dataset for scientific KG construction.",
-      "url": "https://example.com/datasets/scigraph_v2"
+      "name": "OpenSciData",
+      "description": "A large-scale dataset of scientific publications and experimental results.",
+      "url": "https://example.com/datasets/openscidata"
     }
   ],
   "funders": [
-    {"name": "The Science Foundation"},
-    {"name": "National Research Council"}
+    {"name": "FutureTech Grant Program"}
+  ],
+  "objectives": [
+    {"description": "To evaluate the effectiveness of current AI models in hypothesis generation."},
+    {"description": "To propose a new framework for AI-driven experimental design."}
+  ],
+  "hypotheses": [
+    {
+      "description": "Deep learning models outperform traditional statistical methods in predicting experimental outcomes.",
+      "tested_by_methods": ["Deep Learning Comparative Analysis", "Statistical Outcome Modeling"]
+    },
+    {"description": "The 'DynamicConcept' framework reduces time to discovery by 30%."}
+  ],
+  "introduced_concepts": [
+    {
+      "name": "DynamicConcept Framework",
+      "definition": "A novel computational framework for representing and evolving scientific concepts.",
+      "part_of_topics": ["Knowledge Representation", "Computational Science"]
+    },
+    {
+      "name": "Predictive Experimentation AI",
+      "definition": "AI systems capable of autonomously designing and predicting outcomes of experiments.",
+      "is_sub_concept_of": ["Artificial Intelligence"]
+    }
+  ],
+  "research_problems_addressed": [
+    {"description": "High cost and slow pace of traditional scientific experimentation."},
+    {"description": "Difficulty in integrating and reasoning over vast amounts of scientific data."}
+  ],
+  "limitations_stated": [
+    {"description": "The proposed 'DynamicConcept' framework has only been validated in simulated environments."},
+    {"description": "Current AI models used lack full interpretability in their decision-making processes."}
+  ],
+  "future_work_suggested": [
+    {"description": "Extend validation of the 'DynamicConcept' framework to real-world laboratory experiments."},
+    {"description": "Develop new techniques for enhancing the interpretability of AI models in scientific discovery."},
+    {"description": "Explore the integration of quantum computing with AI for complex scientific simulations."}
   ]
 }
 ```
