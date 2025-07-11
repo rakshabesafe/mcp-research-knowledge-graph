@@ -4,27 +4,43 @@ from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
-from fastmcp import FastMCP, Context # Assuming FastMCP and Context are top-level imports
+from fastmcp import FastMCP, Context
 
-# Assuming these custom modules are in the same directory orPYTHONPATH
 from neo4j_handler import Neo4jGraph
 from text_processor import extract_entities_relations
 
-# --- Pydantic Models for Tool Input ---
-class AuthorDetail(BaseModel):
+# --- Pydantic Models for Tool Input (Aligned with new ontology) ---
+class AuthorInput(BaseModel):
     name: str = Field(..., description="Full name of the author.")
     orcid: Optional[str] = Field(default=None, description="ORCID identifier for the author.")
-    affiliation: Optional[str] = Field(default=None, description="Author's affiliation for this paper.")
+    email: Optional[str] = Field(default=None, description="Author's contact email.")
+    affiliation_name: Optional[str] = Field(default=None, description="Name of the author's affiliation for this paper.")
+    affiliation_location: Optional[str] = Field(default=None, description="Location of the author's affiliation.")
+
+class PublicationVenueDetail(BaseModel):
+    name: str = Field(..., description="Name of the journal or conference.")
+    issn_isbn: Optional[str] = Field(default=None, description="ISSN or ISBN of the venue.")
+    publisher: Optional[str] = Field(default=None, description="Publisher of the venue.")
+
+class DatasetDetail(BaseModel):
+    name: str = Field(..., description="Name of the dataset.")
+    description: Optional[str] = Field(default=None, description="Brief description of the dataset.")
+    url: Optional[str] = Field(default=None, description="URL or access point for the dataset.")
+
+class FunderDetail(BaseModel):
+    name: str = Field(..., description="Name of the funding organization or agency.")
 
 class PaperDetails(BaseModel):
     title: str = Field(..., description="Title of the research paper.")
     doi: str = Field(..., description="Digital Object Identifier, used as the primary key.")
     abstract: Optional[str] = Field(default=None, description="Abstract of the paper.")
     publication_date: Optional[str] = Field(default=None, description="Publication date, preferably YYYY-MM-DD.")
-    authors: Optional[List[AuthorDetail]] = Field(default_factory=list, description="List of authors with their details.")
-    keywords: Optional[List[str]] = Field(default_factory=list, description="List of keywords or topics.")
-    venue_name: Optional[str] = Field(default=None, description="Name of the publication venue (journal or conference).")
-    full_text: Optional[str] = Field(default=None, description="Full text of the paper, if available.")
+    authors: Optional[List[AuthorInput]] = Field(default_factory=list, description="List of authors with their details.")
+    keywords: Optional[List[str]] = Field(default_factory=list, description="List of keywords or research topics.")
+    full_text_link: Optional[str] = Field(default=None, description="URL to the full text of the paper.")
+    publication_venue: Optional[PublicationVenueDetail] = Field(default=None, description="Details of the publication venue.")
+    datasets: Optional[List[DatasetDetail]] = Field(default_factory=list, description="List of datasets used or produced.")
+    funders: Optional[List[FunderDetail]] = Field(default_factory=list, description="List of funding organizations.")
 
 # --- Lifespan Management for Neo4j Connection ---
 @asynccontextmanager
@@ -33,118 +49,91 @@ async def lifespan(app: FastMCP):
     print("[Lifespan] MCP Server starting up...")
     uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     user = os.environ.get("NEO4J_USER", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "your_secure_password") # Placeholder
+    password = os.environ.get("NEO4J_PASSWORD", "your_secure_password")
 
     neo4j_client_instance = None
     try:
         neo4j_client_instance = Neo4jGraph(uri, user, password)
-        # Storing on app.state if that's the convention, or directly on app
-        # For now, let's try a custom attribute on app directly, as app.state is not explicitly documented for FastMCP yet
-        app.neo4j_handler = neo4j_client_instance
-        print("[Lifespan] Neo4j handler initialized and attached to FastMCP instance.")
+        app.neo4j_handler_instance = neo4j_client_instance
+        print("[Lifespan] Neo4j handler initialized and attached to FastMCP app instance.")
         yield
     except Exception as e:
         print(f"[Lifespan] Critical error: Failed to initialize Neo4j client during startup: {e}")
-        # If Neo4j connection is critical, might re-raise or prevent server from fully starting
-        # For now, allow server to start but tools will fail if they need neo4j_handler
-        app.neo4j_handler = None # Ensure it's None
-        yield # Must yield for lifespan manager protocol
+        app.neo4j_handler_instance = None
+        yield
     finally:
-        if hasattr(app, 'neo4j_handler') and app.neo4j_handler:
+        if hasattr(app, 'neo4j_handler_instance') and app.neo4j_handler_instance:
             print("[Lifespan] MCP Server shutting down. Closing Neo4j connection.")
-            app.neo4j_handler.close()
+            app.neo4j_handler_instance.close()
         else:
             print("[Lifespan] MCP Server shutting down. No active Neo4j connection to close or was not initialized.")
 
 # --- FastMCP Server Instance ---
-# Initialize FastMCP with the lifespan manager and dependencies
-# Dependencies are important for `fastmcp install`
 mcp_server = FastMCP(
     name="ResearchPaperKGProcessor",
-    instructions="A FastMCP server to process research paper details and build a knowledge graph in Neo4j.",
+    instructions="A FastMCP server to process research paper details and build a knowledge graph in Neo4j based on the new ontology.",
     lifespan=lifespan,
     dependencies=[
-        "fastmcp", # The framework itself
+        "fastmcp",
         "neo4j>=5.0.0,<6.0.0",
-        "spacy>=3.0.0,<4.0.0", # If text_processor uses it
-        "pydantic>=2.0.0,<3.0.0" # For data models
+        "spacy>=3.0.0,<4.0.0",
+        "pydantic>=2.0.0,<3.0.0"
     ]
 )
 
 # --- Core Tool Definition ---
 @mcp_server.tool(
     name="ProcessPaperToKG",
-    description="Processes research paper details (metadata, abstract, etc.) and ingests them into a Neo4j knowledge graph."
+    description="Processes research paper details and ingests them into a Neo4j knowledge graph according to the defined ontology."
 )
 async def process_paper_to_kg(paper_data: PaperDetails, ctx: Context) -> Dict[str, Any]:
     """
-    MCP Tool to process a research paper and generate knowledge graph entries.
+    MCP Tool to process a research paper and generate knowledge graph entries
+    based on the new ontology.
     """
     await ctx.info(f"Received request to process paper DOI: {paper_data.doi}, Title: {paper_data.title}")
 
-    if not hasattr(ctx.fastmcp, 'neo4j_handler') or ctx.fastmcp.neo4j_handler is None:
-        await ctx.error("Neo4j handler not available in FastMCP context. Cannot process paper.")
+    if not hasattr(ctx.fastmcp, 'neo4j_handler_instance') or ctx.fastmcp.neo4j_handler_instance is None:
+        await ctx.error("Neo4j handler not available. Cannot process paper.")
         return {"status": "error", "doi": paper_data.doi, "message": "Neo4j connection not initialized."}
 
-    neo_handler: Neo4jGraph = ctx.fastmcp.neo4j_handler
-    processed_entities = {"nodes_created": 0, "rels_created": 0} # Basic tracking
+    neo_handler: Neo4jGraph = ctx.fastmcp.neo4j_handler_instance
+    summary = {"status": "success", "doi": paper_data.doi, "message": "Paper processing initiated."}
 
     try:
-        # 1. Add Research Paper node
-        # The add_research_paper method in neo4j_handler is synchronous.
-        # FastMCP tools can be async, allowing internal sync calls if needed,
-        # but ideally, I/O bound operations (like DB calls) should be async if the driver supports it.
-        # For now, assuming neo4j_handler methods are blocking.
-        # In a fully async setup, neo4j_handler methods would be async too.
-
-        # Synchronous calls within an async tool are generally run in a thread pool by the ASGI server.
-        # This is acceptable for now.
-
-        await ctx.report_progress(progress=10, message="Adding research paper node...")
+        await ctx.report_progress(progress=5, message="Adding Paper node...")
         neo_handler.add_research_paper(
+            doi=paper_data.doi,
             title=paper_data.title,
             abstract=paper_data.abstract,
             publication_date=paper_data.publication_date,
-            doi=paper_data.doi,
             keywords=paper_data.keywords,
-            full_text=paper_data.full_text,
-            venue_name=paper_data.venue_name
+            full_text_link=paper_data.full_text_link,
+            venue_name=paper_data.publication_venue.name if paper_data.publication_venue else None,
+            venue_issn_isbn=paper_data.publication_venue.issn_isbn if paper_data.publication_venue else None,
+            venue_publisher=paper_data.publication_venue.publisher if paper_data.publication_venue else None
         )
-        await ctx.info(f"Added/Merged ResearchPaper: {paper_data.title} ({paper_data.doi})")
-        processed_entities["nodes_created"] +=1 # Simplified count
+        await ctx.info(f"Handled Paper: {paper_data.title} ({paper_data.doi})")
+        if paper_data.publication_venue and paper_data.publication_venue.name:
+             await ctx.info(f"Handled PublicationVenue: {paper_data.publication_venue.name}")
 
-        if paper_data.venue_name:
-            await ctx.info(f"Handled Venue: {paper_data.venue_name} and linked to paper.")
-            processed_entities["nodes_created"] +=1 # Venue node
-            processed_entities["rels_created"] +=1 # Paper-Venue link
-
-        # 2. Add Authors and link to Paper
         if paper_data.authors:
-            await ctx.report_progress(progress=30, message="Processing authors...")
+            await ctx.report_progress(progress=20, message="Processing Authors...")
             author_ids_for_coauthor_linking = []
-            for author_detail in paper_data.authors:
-                if not author_detail.name:
-                    await ctx.warning("Skipping author with no name.")
-                    continue
-
-                neo_handler.add_author(name=author_detail.name, orcid=author_detail.orcid, affiliation_name=author_detail.affiliation)
-                await ctx.info(f"Added/Merged Author: {author_detail.name}" + (f" (ORCID: {author_detail.orcid})" if author_detail.orcid else "") + (f" (Affiliation: {author_detail.affiliation})" if author_detail.affiliation else ""))
-                processed_entities["nodes_created"] +=1 # Author node
-                if author_detail.affiliation:
-                    processed_entities["nodes_created"] +=1 # Institution node (if new)
-                    processed_entities["rels_created"] +=1 # Author-Institution link
-
-                author_identifier = author_detail.orcid if author_detail.orcid else author_detail.name
-                author_ids_for_coauthor_linking.append({"id": author_identifier, "name": author_detail.name, "is_orcid": bool(author_detail.orcid)})
-
-                neo_handler.link_paper_to_author(
-                    paper_identifier=paper_data.doi,
-                    author_identifier=author_identifier,
-                    paper_by_doi=True,
-                    author_by_orcid=bool(author_detail.orcid)
+            for author_input in paper_data.authors:
+                neo_handler.add_author(
+                    name=author_input.name,
+                    orcid=author_input.orcid,
+                    email=author_input.email,
+                    affiliation_name=author_input.affiliation_name,
+                    affiliation_location=author_input.affiliation_location # Pass location for Affiliation node
                 )
-                processed_entities["rels_created"] +=2 # HAS_AUTHOR, AUTHORED_BY
-                await ctx.info(f"Linked Author '{author_detail.name}' to Paper '{paper_data.title}'")
+                await ctx.info(f"Handled Author: {author_input.name}")
+
+                author_identifier = author_input.orcid if author_input.orcid else author_input.name
+                author_ids_for_coauthor_linking.append({"id": author_identifier, "name": author_input.name, "is_orcid": bool(author_input.orcid)})
+                neo_handler.link_paper_to_author(paper_data.doi, author_identifier, by_orcid=bool(author_input.orcid))
+                await ctx.info(f"Linked Author '{author_input.name}' to Paper '{paper_data.title}'")
 
             if len(author_ids_for_coauthor_linking) > 1:
                 for i in range(len(author_ids_for_coauthor_linking)):
@@ -152,104 +141,89 @@ async def process_paper_to_kg(paper_data: PaperDetails, ctx: Context) -> Dict[st
                         auth1 = author_ids_for_coauthor_linking[i]
                         auth2 = author_ids_for_coauthor_linking[j]
                         neo_handler.link_coauthors(
-                            author1_identifier=auth1["id"],
-                            author2_identifier=auth2["id"],
-                            paper_identifier=paper_data.doi,
-                            author1_by_orcid=auth1["is_orcid"],
-                            author2_by_orcid=auth2["is_orcid"],
-                            paper_by_doi=True
+                            auth1["id"], auth2["id"], paper_data.doi,
+                            author1_by_orcid=auth1["is_orcid"], author2_by_orcid=auth2["is_orcid"]
                         )
-                        processed_entities["rels_created"] +=2 # COAUTHORED_WITH_ON (bidirectional)
-                        await ctx.info(f"Linked Co-authors: '{auth1['name']}' and '{auth2['name']}' on paper '{paper_data.doi}'")
+                        await ctx.info(f"Linked Co-authors: {auth1['name']} and {auth2['name']}")
 
-        # 3. Add Topics from Keywords
-        if paper_data.keywords:
-            await ctx.report_progress(progress=60, message="Processing keywords as topics...")
+        if paper_data.keywords: # These are for ResearchTopic
+            await ctx.report_progress(progress=40, message="Processing ResearchTopics...")
             for keyword in paper_data.keywords:
-                neo_handler.add_topic(keyword)
-                processed_entities["nodes_created"] +=1 # Topic node (if new)
-                await ctx.info(f"Added/Merged Topic (from keyword): {keyword}")
-                neo_handler.link_paper_to_topic(
-                    paper_identifier=paper_data.doi,
-                    topic_name=keyword,
-                    paper_by_doi=True
-                )
-                processed_entities["rels_created"] +=1 # Paper-Topic link
-                await ctx.info(f"Linked Topic '{keyword}' to Paper '{paper_data.title}'")
+                neo_handler.add_research_topic(keyword)
+                await ctx.info(f"Handled ResearchTopic: {keyword}")
+                neo_handler.link_paper_to_research_topic(paper_data.doi, keyword)
+                await ctx.info(f"Linked ResearchTopic '{keyword}' to Paper")
 
-        # 4. Text Processing for additional entities
-        text_to_process = paper_data.abstract
-        if paper_data.full_text:
-            text_to_process = paper_data.full_text
+        if paper_data.datasets:
+            await ctx.report_progress(progress=50, message="Processing Datasets...")
+            for ds_detail in paper_data.datasets:
+                neo_handler.add_dataset(name=ds_detail.name, description=ds_detail.description, url=ds_detail.url)
+                await ctx.info(f"Handled Dataset: {ds_detail.name}")
+                neo_handler.link_paper_to_dataset(paper_data.doi, ds_detail.name)
+                await ctx.info(f"Linked Dataset '{ds_detail.name}' to Paper")
 
-        if text_to_process:
-            await ctx.report_progress(progress=75, message="Performing text processing for additional entities...")
-            # extract_entities_relations is synchronous
-            extracted_nlp_data = extract_entities_relations(text_to_process)
+        if paper_data.funders:
+            await ctx.report_progress(progress=60, message="Processing Funders...")
+            for funder_detail in paper_data.funders:
+                neo_handler.add_funder(name=funder_detail.name)
+                await ctx.info(f"Handled Funder: {funder_detail.name}")
+                neo_handler.link_paper_to_funder(paper_data.doi, funder_detail.name)
+                await ctx.info(f"Linked Funder '{funder_detail.name}' to Paper")
 
+        text_content_for_nlp = paper_data.abstract
+        # Future: could fetch content if paper_data.full_text_link is present and text_content_for_nlp is empty
+
+        if text_content_for_nlp:
+            await ctx.report_progress(progress=70, message="Performing NLP text processing...")
+            extracted_nlp_data = extract_entities_relations(text_content_for_nlp) # Sync call
             if extracted_nlp_data:
+                await ctx.info("Processing entities extracted from text by NLP...")
+                # Methods from NLP
                 if "methods" in extracted_nlp_data.get("entities", {}):
-                    for method_info in extracted_nlp_data["entities"]["methods"]:
+                    for method_info in extracted_nlp_data.get("entities", {}).get("methods", []):
                         m_name = method_info.get("name")
-                        m_desc = method_info.get("description")
                         if m_name:
-                            neo_handler.add_method(name=m_name, description=m_desc)
-                            processed_entities["nodes_created"] +=1
-                            await ctx.info(f"Added/Merged Method (from text): {m_name}")
+                            neo_handler.add_method(name=m_name, description=method_info.get("description"))
                             neo_handler.link_paper_to_method(paper_data.doi, m_name)
-                            processed_entities["rels_created"] +=1
-                            await ctx.info(f"Linked Method '{m_name}' to Paper '{paper_data.title}'")
-
+                            await ctx.info(f"Handled Method (from text): {m_name}")
+                # Affiliations from NLP (text_processor identifies these as 'institutions')
                 if "institutions" in extracted_nlp_data.get("entities", {}):
-                    for inst_info in extracted_nlp_data["entities"]["institutions"]:
-                        i_name = inst_info.get("name")
-                        i_loc = inst_info.get("location")
-                        if i_name:
-                            neo_handler.add_institution(name=i_name, location=i_loc)
-                            processed_entities["nodes_created"] +=1
-                            await ctx.info(f"Added/Merged Institution (from text): {i_name}")
-
+                    for aff_info in extracted_nlp_data.get("entities", {}).get("institutions",[]):
+                        aff_name = aff_info.get("name")
+                        if aff_name:
+                            # Assuming location might also be extracted by NLP in future
+                            neo_handler.add_affiliation(name=aff_name, location=aff_info.get("location"))
+                            await ctx.info(f"Handled Affiliation (from text): {aff_name}")
+                # ResearchTopics from NLP (text_processor identifies these as 'topics')
                 if "topics" in extracted_nlp_data.get("entities", {}):
-                    for topic_info in extracted_nlp_data["entities"]["topics"]:
-                        t_name = topic_info.get("name")
-                        if t_name and not (paper_data.keywords and t_name in paper_data.keywords):
-                            neo_handler.add_topic(t_name)
-                            processed_entities["nodes_created"] +=1
-                            await ctx.info(f"Added/Merged Topic (from text): {t_name}")
-                            neo_handler.link_paper_to_topic(paper_data.doi, t_name)
-                            processed_entities["rels_created"] +=1
-                            await ctx.info(f"Linked Topic '{t_name}' to Paper '{paper_data.title}'")
+                    for topic_info in extracted_nlp_data.get("entities", {}).get("topics",[]):
+                        rt_name = topic_info.get("name")
+                        if rt_name and not (paper_data.keywords and rt_name in paper_data.keywords):
+                            neo_handler.add_research_topic(rt_name)
+                            neo_handler.link_paper_to_research_topic(paper_data.doi, rt_name)
+                            await ctx.info(f"Handled ResearchTopic (from text): {rt_name}")
+            else:
+                await ctx.info("NLP text processor returned no structured entities.")
         else:
-            await ctx.info("No abstract or full text provided for NLP extraction.")
+            await ctx.info("No text content (abstract/full_text_link content) for NLP.")
 
         await ctx.report_progress(progress=100, message="Paper processing complete.")
-        await ctx.info(f"Successfully processed paper DOI: {paper_data.doi}")
-        return {"status": "success", "doi": paper_data.doi, "message": "Paper processed and KG updated.", "summary": processed_entities}
-
+        summary["message"] = "Paper processed and KG updated successfully."
+        await ctx.info(f"Successfully finished processing tasks for paper DOI: {paper_data.doi}")
+        return summary
     except Exception as e:
-        await ctx.error(f"Error processing paper {paper_data.doi}: {e}", exc_info=True)
-        return {"status": "error", "doi": paper_data.doi, "message": str(e)}
-
+        await ctx.error(f"Major error processing paper {paper_data.doi}: {e}", exc_info=True)
+        return {"status": "error", "doi": paper_data.doi, "message": f"An unexpected error occurred: {str(e)}"}
 
 # --- Main execution for running the server ---
 if __name__ == "__main__":
     print("Starting FastMCP server for Research Paper KG Processor...")
-    # mcp_server.run() will use stdio by default.
-    # For HTTP, use: mcp_server.run(transport="http", host="0.0.0.0", port=8000)
-    # The fastmcp CLI `fastmcp run fastmcp_server.py:mcp_server` is often preferred for more options.
-
-    # For simplicity in direct python execution:
-    # Check if NEO4J_PASSWORD is set, if not, maybe don't run or warn.
     if not os.environ.get("NEO4J_PASSWORD"):
         print("WARNING: NEO4J_PASSWORD environment variable not set.")
         print("The server might not connect to Neo4j correctly.")
         print("Please set NEO4J_URI, NEO4J_USER, and NEO4J_PASSWORD.")
-
-    # FastMCP's mcp.run() is blocking.
-    # If run via `python fastmcp_server.py`, it will start here.
-    # If run via `fastmcp run fastmcp_server.py:mcp_server`, this block is ignored.
     try:
-        mcp_server.run() # Defaults to stdio transport
+        mcp_server.run()
     except KeyboardInterrupt:
         print("\nFastMCP server shutting down...")
     except Exception as e:

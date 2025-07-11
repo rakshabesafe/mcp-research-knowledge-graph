@@ -8,18 +8,36 @@ The core of this project is a FastMCP server that exposes a tool named `ProcessP
 
 ## Ontology
 
-The knowledge graph aims to capture:
+The knowledge graph is built according to the following ontology:
 
-**Core Concepts:**
-*   **ResearchPaper:** Title, Abstract, Publication Date, DOI, Keywords, Full Text, Venue.
-*   **Author:** Name, Affiliation, OrcID.
-*   **Topic:** Name/Keywords.
-*   **Institution:** Name, Location.
-*   **Method:** Name, Description.
-*   **Venue:** Name (e.g., conference, journal).
+**Core Entities (Node Labels):**
+*   **`Paper`**: Represents a research publication.
+    *   *Properties:* `title`, `abstract`, `publication_date`, `doi` (unique ID), `keywords` (list), `full_text_link` (URL).
+*   **`Author`**: An individual who contributed to a paper.
+    *   *Properties:* `name`, `orcid` (unique ID, optional), `email` (optional).
+*   **`Affiliation`**: An institution or organization an author is associated with.
+    *   *Properties:* `name` (unique ID), `location` (optional).
+*   **`PublicationVenue`**: The entity where the paper is published (e.g., journal, conference).
+    *   *Properties:* `name` (unique ID), `issn_isbn` (optional), `publisher` (optional).
+*   **`ResearchTopic`**: The subject area or keyword associated with a paper.
+    *   *Properties:* `name` (unique ID).
+*   **`Method`**: A specific technique, algorithm, or methodology used.
+    *   *Properties:* `name` (unique ID), `description` (optional).
+*   **`Dataset`**: A collection of data used or produced.
+    *   *Properties:* `name` (unique ID), `description` (optional), `url` (optional).
+*   **`Funder`**: An organization that funded the research.
+    *   *Properties:* `name` (unique ID).
 
-**Relationships:** (Examples)
-*   `HAS_AUTHOR`, `PUBLISHED_IN`, `FOCUSES_ON`, `EMPLOYS_METHOD`, `AFFILIATED_WITH`, `CITES`, `COAUTHORED_WITH_ON`.
+**Relationships (Edge Types):**
+*   `Paper` -[:HAS_AUTHOR]-> `Author` (Inverse: `Author` -[:AUTHORED_BY]-> `Paper`)
+*   `Author` -[:IS_AFFILIATED_WITH]-> `Affiliation`
+*   `Paper` -[:PUBLISHED_IN]-> `PublicationVenue`
+*   `Paper` -[:HAS_TOPIC]-> `ResearchTopic`
+*   `Paper` -[:USES_METHOD]-> `Method`
+*   `Paper` -[:USES_DATASET]-> `Dataset`
+*   `Paper` -[:IS_FUNDED_BY]-> `Funder`
+*   `Paper` -[:CITES]-> `Paper` (Inverse: `Paper` -[:REFERENCED_BY]-> `Paper`)
+*   `Author` -[:COAUTHORED_WITH_ON {paper_doi: "..."}]-> `Author` (Bidirectional for a specific paper)
 
 ## Prerequisites
 
@@ -124,20 +142,45 @@ For comprehensive details on all FastMCP configuration options, please refer to 
 
 Once the server is running, MCP clients can call the `ProcessPaperToKG` tool. The tool expects a JSON object matching the `PaperDetails` Pydantic model.
 
-**Example Input for `ProcessPaperToKG` tool:**
+**Example Input for `ProcessPaperToKG` tool (reflecting updated `PaperDetails` model):**
 ```json
 {
-  "title": "A Study on Knowledge Graph Construction",
-  "doi": "10.xxxx/example.doi.123",
-  "abstract": "This paper explores methods for automatically building knowledge graphs. Research at Example University.",
-  "publication_date": "2024-01-15",
+  "title": "Advanced Techniques in Scientific KG Construction",
+  "doi": "10.sample/advkg2024",
+  "abstract": "This paper details advanced methods for building knowledge graphs from scientific literature, focusing on NLP and machine learning. Research funded by The Science Foundation and conducted at Premier University.",
+  "publication_date": "2024-07-15",
   "authors": [
-    {"name": "Dr. Eva Core", "orcid": "0000-0001-2345-0001", "affiliation": "Example University"},
-    {"name": "Dr. Max Headroom", "affiliation": "Some Other University"}
+    {
+      "name": "Dr. Jane Smith",
+      "orcid": "0000-0002-1825-0097",
+      "email": "jane.smith@example.com",
+      "affiliation_name": "Premier University",
+      "affiliation_location": "Tech City"
+    },
+    {
+      "name": "Dr. John Doe",
+      "email": "john.doe@research.org",
+      "affiliation_name": "Independent Research Lab"
+    }
   ],
-  "keywords": ["Knowledge Graphs", "NLP", "Science"],
-  "venue_name": "Journal of Advanced Scientific Computing",
-  "full_text": null
+  "keywords": ["Knowledge Representation", "Scientific Data", "Machine Learning"],
+  "full_text_link": "https://example.com/papers/advkg2024.pdf",
+  "publication_venue": {
+    "name": "Journal of Semantic Web Technologies",
+    "issn_isbn": "1234-567X",
+    "publisher": "Tech Press"
+  },
+  "datasets": [
+    {
+      "name": "SciGraph Dataset v2",
+      "description": "A benchmark dataset for scientific KG construction.",
+      "url": "https://example.com/datasets/scigraph_v2"
+    }
+  ],
+  "funders": [
+    {"name": "The Science Foundation"},
+    {"name": "National Research Council"}
+  ]
 }
 ```
 

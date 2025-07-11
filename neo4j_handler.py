@@ -9,108 +9,127 @@ class Neo4jGraph:
         try:
             self._driver = GraphDatabase.driver(self._uri, auth=(self._user, self._password))
             self._driver.verify_connectivity()
-            print("Successfully connected to Neo4j.")
+            print("[Neo4jHandler] Successfully connected to Neo4j.")
         except Exception as e:
-            print(f"Failed to connect to Neo4j: {e}")
-            raise
+            print(f"[Neo4jHandler] Failed to connect to Neo4j: {e}")
+            # Re-raise to make it clear to the caller (e.g., lifespan manager)
+            raise ConnectionError(f"Neo4j connection failed: {e}") from e
 
     def close(self):
         if self._driver is not None:
             self._driver.close()
-            print("Neo4j connection closed.")
+            print("[Neo4jHandler] Neo4j connection closed.")
 
     def _run_query(self, query, parameters=None):
         if self._driver is None:
-            print("Driver not initialized.")
+            print("[Neo4jHandler] Driver not initialized. Cannot run query.")
+            return None # Or raise an error
+        try:
+            with self._driver.session() as session:
+                result = session.run(query, parameters)
+                return [record for record in result]
+        except Exception as e:
+            print(f"[Neo4jHandler] Error running Cypher query: {e}\nQuery: {query}\nParams: {parameters}")
+            # Depending on desired behavior, might re-raise or return None/empty
+            # For now, printing and returning None to avoid crashing the whole tool for one bad query.
             return None
-        with self._driver.session() as session:
-            result = session.run(query, parameters)
-            return [record for record in result]
 
-    def add_research_paper(self, title, abstract=None, publication_date=None, doi=None, keywords=None, full_text=None, venue_name=None):
+
+    # --- Node Creation/Merging Methods ---
+
+    def add_research_paper(self, doi: str, title: str, abstract: Optional[str] = None,
+                           publication_date: Optional[str] = None, keywords: Optional[list] = None,
+                           full_text_link: Optional[str] = None,
+                           venue_name: Optional[str] = None,
+                           venue_issn_isbn: Optional[str] = None,
+                           venue_publisher: Optional[str] = None):
+        # Node label is Paper now
         query = """
-        MERGE (p:ResearchPaper {doi: $doi})
-        ON CREATE SET p.title = $title, p.abstract = $abstract, p.publication_date = $publication_date,
-                      p.keywords = $keywords, p.full_text = $full_text, p.created_at = timestamp()
-        ON MATCH SET p.title = $title, p.abstract = $abstract, p.publication_date = $publication_date,
-                     p.keywords = $keywords, p.full_text = $full_text, p.updated_at = timestamp()
+        MERGE (p:Paper {doi: $doi})
+        ON CREATE SET
+            p.title = $title, p.abstract = $abstract, p.publication_date = $publication_date,
+            p.keywords = $keywords, p.full_text_link = $full_text_link,
+            p.created_at = timestamp()
+        ON MATCH SET
+            p.title = $title, p.abstract = $abstract, p.publication_date = $publication_date,
+            p.keywords = $keywords, p.full_text_link = $full_text_link,
+            p.updated_at = timestamp()
         RETURN p
         """
-        # Ensure DOI is present for merging
-        if not doi:
-            # If DOI is not available, we might use title for merging, but it's less reliable.
-            # For now, let's assume DOI is the primary key for ResearchPaper.
-            # Alternatively, create a unique ID if DOI is missing.
-            # This example prioritizes DOI.
-            print("DOI is required to add/merge a research paper.")
-            # Fallback or error handling needed if DOI is truly optional for MERGE.
-            # For now, let's use title if DOI is None, but this is not ideal for uniqueness.
-            if title:
-                 query_by_title = """
-                 MERGE (p:ResearchPaper {title: $title})
-                 ON CREATE SET p.doi = $doi, p.abstract = $abstract, p.publication_date = $publication_date,
-                               p.keywords = $keywords, p.full_text = $full_text, p.created_at = timestamp()
-                 ON MATCH SET p.doi = $doi, p.abstract = $abstract, p.publication_date = $publication_date,
-                              p.keywords = $keywords, p.full_text = $full_text, p.updated_at = timestamp()
-                 RETURN p
-                 """
-                 return self._run_query(query_by_title, {
-                     "title": title, "abstract": abstract, "publication_date": publication_date,
-                     "doi": doi, "keywords": keywords, "full_text": full_text
-                 })
-            else:
-                print("DOI or Title is required to add/merge a research paper.")
-                return None
-
+        if not doi: # DOI is crucial for merging
+            print("[Neo4jHandler] DOI is required to add/merge a Paper.")
+            return None
 
         params = {
             "doi": doi, "title": title, "abstract": abstract,
             "publication_date": publication_date, "keywords": keywords,
-            "full_text": full_text
+            "full_text_link": full_text_link
         }
-        result = self._run_query(query, params)
+        paper_node = self._run_query(query, params)
 
         if venue_name:
-            self.add_venue(venue_name)
-            self.link_paper_to_venue(doi if doi else title, venue_name)
-        return result
+            self.add_publication_venue(name=venue_name, issn_isbn=venue_issn_isbn, publisher=venue_publisher)
+            self.link_paper_to_publication_venue(paper_doi=doi, venue_name=venue_name)
+        return paper_node
 
-    def add_author(self, name, affiliation_name=None, orcid=None):
-        # Prefer ORCID for merging if available
+    def add_author(self, name: str, orcid: Optional[str] = None, email: Optional[str] = None,
+                   affiliation_name: Optional[str] = None, affiliation_location: Optional[str] = None):
+        # Node label is Author
         if orcid:
             query = """
-            MERGE (a:Author {orcid: $orcid})
-            ON CREATE SET a.name = $name, a.created_at = timestamp()
-            ON MATCH SET a.name = $name, a.updated_at = timestamp()
-            RETURN a
+            MERGE (au:Author {orcid: $orcid})
+            ON CREATE SET au.name = $name, au.email = $email, au.created_at = timestamp()
+            ON MATCH SET au.name = $name, au.email = $email, au.updated_at = timestamp()
+            RETURN au
             """
-            params = {"orcid": orcid, "name": name}
-        else:
+            params = {"orcid": orcid, "name": name, "email": email}
+        else: # Merge by name if no ORCID
             query = """
-            MERGE (a:Author {name: $name})
-            ON CREATE SET a.created_at = timestamp()
-            ON MATCH SET a.updated_at = timestamp()
-            RETURN a
+            MERGE (au:Author {name: $name})
+            ON CREATE SET au.email = $email, au.orcid = $orcid, au.created_at = timestamp()
+            ON MATCH SET au.email = $email, au.orcid = $orcid, au.updated_at = timestamp()
+            RETURN au
             """
-            params = {"name": name}
+            params = {"name": name, "email": email, "orcid": orcid}
 
-        result = self._run_query(query, params)
+        author_node = self._run_query(query, params)
         if affiliation_name:
-            self.add_institution(affiliation_name)
-            # Use ORCID if available for linking, else name
+            self.add_affiliation(name=affiliation_name, location=affiliation_location)
             author_identifier = orcid if orcid else name
-            self.link_author_to_institution(author_identifier, affiliation_name, by_orcid=bool(orcid))
-        return result
+            self.link_author_to_affiliation(author_identifier=author_identifier, affiliation_name=affiliation_name, by_orcid=bool(orcid))
+        return author_node
 
-    def add_topic(self, name):
+    def add_affiliation(self, name: str, location: Optional[str] = None):
+        # Node label is Affiliation
         query = """
-        MERGE (t:Topic {name: $name})
-        ON CREATE SET t.created_at = timestamp()
-        RETURN t
+        MERGE (aff:Affiliation {name: $name})
+        ON CREATE SET aff.location = $location, aff.created_at = timestamp()
+        ON MATCH SET aff.location = $location, aff.updated_at = timestamp()
+        RETURN aff
+        """
+        return self._run_query(query, {"name": name, "location": location})
+
+    def add_publication_venue(self, name: str, issn_isbn: Optional[str] = None, publisher: Optional[str] = None):
+        # Node label is PublicationVenue
+        query = """
+        MERGE (pv:PublicationVenue {name: $name})
+        ON CREATE SET pv.issn_isbn = $issn_isbn, pv.publisher = $publisher, pv.created_at = timestamp()
+        ON MATCH SET pv.issn_isbn = $issn_isbn, pv.publisher = $publisher, pv.updated_at = timestamp()
+        RETURN pv
+        """
+        return self._run_query(query, {"name": name, "issn_isbn": issn_isbn, "publisher": publisher})
+
+    def add_research_topic(self, name: str):
+        # Node label is ResearchTopic
+        query = """
+        MERGE (rt:ResearchTopic {name: $name})
+        ON CREATE SET rt.created_at = timestamp()
+        RETURN rt
         """
         return self._run_query(query, {"name": name})
 
-    def add_method(self, name, description=None):
+    def add_method(self, name: str, description: Optional[str] = None):
+        # Node label is Method (same as before)
         query = """
         MERGE (m:Method {name: $name})
         ON CREATE SET m.description = $description, m.created_at = timestamp()
@@ -119,206 +138,194 @@ class Neo4jGraph:
         """
         return self._run_query(query, {"name": name, "description": description})
 
-    def add_institution(self, name, location=None):
+    def add_dataset(self, name: str, description: Optional[str] = None, url: Optional[str] = None):
+        # Node label is Dataset
         query = """
-        MERGE (i:Institution {name: $name})
-        ON CREATE SET i.location = $location, i.created_at = timestamp()
-        ON MATCH SET i.location = $location, i.updated_at = timestamp()
-        RETURN i
+        MERGE (d:Dataset {name: $name})
+        ON CREATE SET d.description = $description, d.url = $url, d.created_at = timestamp()
+        ON MATCH SET d.description = $description, d.url = $url, d.updated_at = timestamp()
+        RETURN d
         """
-        return self._run_query(query, {"name": name, "location": location})
+        return self._run_query(query, {"name": name, "description": description, "url": url})
 
-    def add_venue(self, name): # e.g., conference or journal
+    def add_funder(self, name: str):
+        # Node label is Funder
         query = """
-        MERGE (v:Venue {name: $name})
-        ON CREATE SET v.created_at = timestamp()
-        RETURN v
+        MERGE (f:Funder {name: $name})
+        ON CREATE SET f.created_at = timestamp()
+        RETURN f
         """
         return self._run_query(query, {"name": name})
 
-    def link_paper_to_author(self, paper_identifier, author_identifier, paper_by_doi=True, author_by_orcid=False):
-        paper_match_prop = "doi" if paper_by_doi else "title"
-        author_match_prop = "orcid" if author_by_orcid else "name"
+    # --- Relationship Linking Methods ---
 
-        query = f"""
-        MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-        MATCH (a:Author {{{author_match_prop}: $author_id}})
-        MERGE (p)-[r:HAS_AUTHOR]->(a)
-        MERGE (a)-[r_inv:AUTHORED_BY]->(p)
-        RETURN type(r), type(r_inv)
-        """
-        return self._run_query(query, {"paper_id": paper_identifier, "author_id": author_identifier})
-
-    def link_paper_to_topic(self, paper_identifier, topic_name, paper_by_doi=True):
-        paper_match_prop = "doi" if paper_by_doi else "title"
-        query = f"""
-        MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-        MATCH (t:Topic {{name: $topic_name}})
-        MERGE (p)-[r:FOCUSES_ON]->(t)
-        RETURN type(r)
-        """
-        return self._run_query(query, {"paper_id": paper_identifier, "topic_name": topic_name})
-
-    def link_paper_to_method(self, paper_identifier, method_name, paper_by_doi=True):
-        paper_match_prop = "doi" if paper_by_doi else "title"
-        query = f"""
-        MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-        MATCH (m:Method {{name: $method_name}})
-        MERGE (p)-[r:EMPLOYS_METHOD]->(m)
-        RETURN type(r)
-        """
-        return self._run_query(query, {"paper_id": paper_identifier, "method_name": method_name})
-
-    def link_author_to_institution(self, author_identifier, institution_name, by_orcid=False):
+    def link_paper_to_author(self, paper_doi: str, author_identifier: str, by_orcid: bool = False):
+        # Relationship :HAS_AUTHOR
         author_match_prop = "orcid" if by_orcid else "name"
         query = f"""
-        MATCH (a:Author {{{author_match_prop}: $author_id}})
-        MATCH (i:Institution {{name: $institution_name}})
-        MERGE (a)-[r:AFFILIATED_WITH]->(i)
-        RETURN type(r)
+        MATCH (p:Paper {{doi: $paper_doi}})
+        MATCH (au:Author {{{author_match_prop}: $author_id}})
+        MERGE (p)-[r:HAS_AUTHOR]->(au)
+        MERGE (au)-[r_inv:AUTHORED_BY]->(p) // Maintain inverse for querying ease
+        RETURN type(r), type(r_inv)
         """
-        return self._run_query(query, {"author_id": author_identifier, "institution_name": institution_name})
+        return self._run_query(query, {"paper_doi": paper_doi, "author_id": author_identifier})
 
-    def link_paper_to_venue(self, paper_identifier, venue_name, paper_by_doi=True):
-        paper_match_prop = "doi" if paper_by_doi else "title"
+    def link_author_to_affiliation(self, author_identifier: str, affiliation_name: str, by_orcid: bool = False):
+        # Relationship :IS_AFFILIATED_WITH
+        author_match_prop = "orcid" if by_orcid else "name"
         query = f"""
-        MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-        MATCH (v:Venue {{name: $venue_name}})
-        MERGE (p)-[r:PUBLISHED_IN]->(v)
+        MATCH (au:Author {{{author_match_prop}: $author_id}})
+        MATCH (aff:Affiliation {{name: $affiliation_name}})
+        MERGE (au)-[r:IS_AFFILIATED_WITH]->(aff)
         RETURN type(r)
         """
-        return self._run_query(query, {"paper_id": paper_identifier, "venue_name": venue_name})
+        return self._run_query(query, {"author_id": author_identifier, "affiliation_name": affiliation_name})
 
-    def link_papers_citation(self, citing_paper_doi, cited_paper_doi):
-        # Assuming papers are identified by DOI for citations
+    def link_paper_to_publication_venue(self, paper_doi: str, venue_name: str):
+        # Relationship :PUBLISHED_IN
         query = """
-        MATCH (citing_p:ResearchPaper {doi: $citing_doi})
-        MATCH (cited_p:ResearchPaper {doi: $cited_doi})
+        MATCH (p:Paper {doi: $paper_doi})
+        MATCH (pv:PublicationVenue {name: $venue_name})
+        MERGE (p)-[r:PUBLISHED_IN]->(pv)
+        RETURN type(r)
+        """
+        return self._run_query(query, {"paper_doi": paper_doi, "venue_name": venue_name})
+
+    def link_paper_to_research_topic(self, paper_doi: str, topic_name: str):
+        # Relationship :HAS_TOPIC
+        query = """
+        MATCH (p:Paper {doi: $paper_doi})
+        MATCH (rt:ResearchTopic {name: $topic_name})
+        MERGE (p)-[r:HAS_TOPIC]->(rt)
+        RETURN type(r)
+        """
+        return self._run_query(query, {"paper_doi": paper_doi, "topic_name": topic_name})
+
+    def link_paper_to_method(self, paper_doi: str, method_name: str):
+        # Relationship :USES_METHOD
+        query = """
+        MATCH (p:Paper {doi: $paper_doi})
+        MATCH (m:Method {name: $method_name})
+        MERGE (p)-[r:USES_METHOD]->(m)
+        RETURN type(r)
+        """
+        return self._run_query(query, {"paper_doi": paper_doi, "method_name": method_name})
+
+    def link_paper_to_dataset(self, paper_doi: str, dataset_name: str):
+        # Relationship :USES_DATASET
+        query = """
+        MATCH (p:Paper {doi: $paper_doi})
+        MATCH (d:Dataset {name: $dataset_name})
+        MERGE (p)-[r:USES_DATASET]->(d)
+        RETURN type(r)
+        """
+        return self._run_query(query, {"paper_doi": paper_doi, "dataset_name": dataset_name})
+
+    def link_paper_to_funder(self, paper_doi: str, funder_name: str):
+        # Relationship :IS_FUNDED_BY
+        query = """
+        MATCH (p:Paper {doi: $paper_doi})
+        MATCH (f:Funder {name: $funder_name})
+        MERGE (p)-[r:IS_FUNDED_BY]->(f)
+        RETURN type(r)
+        """
+        return self._run_query(query, {"paper_doi": paper_doi, "funder_name": funder_name})
+
+    def link_papers_citation(self, citing_paper_doi: str, cited_paper_doi: str):
+        # Relationship :CITES
+        query = """
+        MATCH (citing_p:Paper {doi: $citing_doi})
+        MATCH (cited_p:Paper {doi: $cited_doi})
         MERGE (citing_p)-[r:CITES]->(cited_p)
-        MERGE (cited_p)-[r_inv:REFERENCED_BY]->(citing_p)
+        MERGE (cited_p)-[r_inv:REFERENCED_BY]->(citing_p) // Maintain inverse
         RETURN type(r), type(r_inv)
         """
         return self._run_query(query, {"citing_doi": citing_paper_doi, "cited_doi": cited_paper_doi})
 
-    def link_coauthors(self, author1_identifier, author2_identifier, paper_identifier, author1_by_orcid=False, author2_by_orcid=False, paper_by_doi=True):
-        # This relationship is implicitly created if they are authors of the same paper.
-        # However, an explicit COAUTHORED_WITH can be useful for direct queries.
-        # This function ensures they are linked on a specific paper.
+    def link_coauthors(self, author1_identifier: str, author2_identifier: str, paper_doi: str,
+                       author1_by_orcid: bool = False, author2_by_orcid: bool = False):
+        # This still links authors on a specific paper, relationship name can be generic or specific
+        # New ontology doesn't specify a co-author link, but it's often useful.
+        # Let's keep it as COAUTHORED_WITH_ON or make it more generic if preferred.
+        # For now, keeping the specific-to-paper link.
         author1_match_prop = "orcid" if author1_by_orcid else "name"
         author2_match_prop = "orcid" if author2_by_orcid else "name"
-        paper_match_prop = "doi" if paper_by_doi else "title"
 
         query = f"""
         MATCH (a1:Author {{{author1_match_prop}: $author1_id}})
         MATCH (a2:Author {{{author2_match_prop}: $author2_id}})
-        MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-        // Ensure both authors are connected to the paper
+        MATCH (p:Paper {{doi: $paper_doi}})
+        // Ensure both authors are connected to the paper via HAS_AUTHOR
         MERGE (a1)<-[:HAS_AUTHOR]-(p)-[:HAS_AUTHOR]->(a2)
         // Create co-author link, could be specific to the paper or general
-        MERGE (a1)-[r:COAUTHORED_WITH_ON {{paper_{paper_match_prop}: $paper_id}}]->(a2)
-        MERGE (a2)-[r_inv:COAUTHORED_WITH_ON {{paper_{paper_match_prop}: $paper_id}}]->(a1)
+        MERGE (a1)-[r:COAUTHORED_WITH_ON {{paper_doi: $paper_doi}}]->(a2)
+        MERGE (a2)-[r_inv:COAUTHORED_WITH_ON {{paper_doi: $paper_doi}}]->(a1)
         RETURN type(r), type(r_inv)
         """
         return self._run_query(query, {
             "author1_id": author1_identifier,
             "author2_id": author2_identifier,
-            "paper_id": paper_identifier
+            "paper_doi": paper_doi
         })
 
+# Example Usage (for testing this module directly)
 if __name__ == '__main__':
-    # Example Usage (requires a running Neo4j instance)
-    # Replace with your Neo4j credentials and URI
-    NEO4J_URI = "bolt://localhost:7687"
-    NEO4J_USER = "neo4j"
-    NEO4J_PASSWORD = "password" # Change this!
+    # This example requires NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD environment variables to be set
+    # or default values to work with a local Neo4j instance.
+    import os
+    NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password") # Replace with your actual password
 
+    if NEO4J_PASSWORD == "password":
+        print("WARNING: Using default Neo4j password for example. Please ensure it's changed for production.")
+
+    graph = None
     try:
         graph = Neo4jGraph(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
 
-        # Add a research paper
-        paper_doi = "10.1000/xyz123"
-        paper_title = "The Future of AI in Research"
+        # Test new ontology
+        paper1_doi = "10.test/paper001"
         graph.add_research_paper(
-            title=paper_title,
-            abstract="This paper discusses the advancements...",
-            publication_date="2023-10-26",
-            doi=paper_doi,
-            keywords=["AI", "Research", "Machine Learning"],
-            venue_name="Journal of Innovative Research"
+            doi=paper1_doi, title="Paper on New Methods", abstract="Uses method X.",
+            keywords=["TopicA", "Methodology"], full_text_link="http://example.com/paper001.pdf",
+            venue_name="Journal of Test Results", venue_issn_isbn="1234-5678", venue_publisher="Test Pub"
         )
-        print(f"Added paper: {paper_title}")
+        print(f"Added Paper: {paper1_doi}")
 
-        # Add authors
-        author1_name = "Dr. Alice Smith"
-        author1_orcid = "0000-0001-2345-6789"
-        graph.add_author(name=author1_name, orcid=author1_orcid, affiliation_name="Tech University")
-        print(f"Added author: {author1_name}")
+        graph.add_author(name="Dr. Test", orcid="0000-0000-0000-0001", email="dr.test@example.com", affiliation_name="Test University", affiliation_location="Testville")
+        print("Added Author: Dr. Test")
+        graph.link_paper_to_author(paper_doi=paper1_doi, author_identifier="0000-0000-0000-0001", by_orcid=True)
+        print("Linked Dr. Test to paper.")
 
-        author2_name = "Dr. Bob Johnson"
-        graph.add_author(name=author2_name, affiliation_name="Science Institute")
-        print(f"Added author: {author2_name}")
+        graph.add_research_topic("TopicA") # Should merge
+        graph.link_paper_to_research_topic(paper_doi=paper1_doi, topic_name="TopicA")
+        print("Linked TopicA to paper.")
 
-        # Link paper to authors
-        graph.link_paper_to_author(paper_identifier=paper_doi, author_identifier=author1_orcid, paper_by_doi=True, author_by_orcid=True)
-        graph.link_paper_to_author(paper_identifier=paper_doi, author_identifier=author2_name, paper_by_doi=True, author_by_orcid=False)
-        print("Linked paper to authors.")
+        graph.add_method(name="Method X", description="A novel approach.")
+        graph.link_paper_to_method(paper_doi=paper1_doi, method_name="Method X")
+        print("Linked Method X to paper.")
 
-        # Add topics and link to paper
-        for keyword in ["AI", "Research", "Machine Learning"]:
-            graph.add_topic(keyword)
-            graph.link_paper_to_topic(paper_identifier=paper_doi, topic_name=keyword, paper_by_doi=True)
-        print("Added topics and linked to paper.")
+        graph.add_dataset(name="Dataset Alpha", description="Primary dataset used.", url="http://example.com/dataset_alpha")
+        graph.link_paper_to_dataset(paper_doi=paper1_doi, dataset_name="Dataset Alpha")
+        print("Linked Dataset Alpha to paper.")
 
-        # Add a method and link to paper
-        method_name = "Deep Learning Analysis"
-        graph.add_method(name=method_name, description="Utilizing CNNs for pattern recognition.")
-        graph.link_paper_to_method(paper_identifier=paper_doi, method_name=method_name, paper_by_doi=True)
-        print("Added method and linked to paper.")
+        graph.add_funder(name="National Test Foundation")
+        graph.link_paper_to_funder(paper_doi=paper1_doi, funder_name="National Test Foundation")
+        print("Linked National Test Foundation to paper.")
 
-        # Example of co-author link (on the specific paper)
-        graph.link_coauthors(
-            author1_identifier=author1_orcid,
-            author2_identifier=author2_name,
-            paper_identifier=paper_doi,
-            author1_by_orcid=True,
-            author2_by_orcid=False,
-            paper_by_doi=True
-        )
-        print("Linked co-authors on the paper.")
-
-        # Add another paper for citation example
-        cited_paper_doi = "10.1000/abc789"
-        cited_paper_title = "Foundations of Neural Networks"
-        graph.add_research_paper(title=cited_paper_title, doi=cited_paper_doi, venue_name="Archive of CS")
-        print(f"Added paper: {cited_paper_title}")
-
-        # Link papers by citation
-        graph.link_papers_citation(citing_paper_doi=paper_doi, cited_paper_doi=cited_paper_doi)
-        print(f"Linked {paper_title} (CITES) {cited_paper_title}")
+        paper2_doi = "10.test/paper002"
+        graph.add_research_paper(doi=paper2_doi, title="Citing Paper")
+        graph.link_papers_citation(citing_paper_doi=paper2_doi, cited_paper_doi=paper1_doi)
+        print(f"Linked {paper2_doi} CITES {paper1_doi}")
 
 
+    except ConnectionError as ce:
+        print(f"Example usage failed to connect to Neo4j: {ce}")
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred in example usage: {e}")
     finally:
-        if 'graph' in locals() and graph._driver is not None:
+        if graph:
             graph.close()
-
-    # Note: For the 'hasResearchQuestion/addressesResearchQuestion' and 'producedBy/produces' relationships,
-    # these would typically require more advanced NLP to extract from text, or explicit input.
-    # The current structure allows adding generic nodes/relationships if such data is available.
-    # For example, one could add a 'ResearchQuestion' node and link it.
-    # def add_research_question(self, question_text, paper_doi_or_title):
-    #     self.add_node_with_properties("ResearchQuestion", {"text": question_text})
-    #     self.link_paper_to_node(paper_doi_or_title, "ResearchQuestion", question_text, "HAS_RESEARCH_QUESTION", node_prop_to_match="text")
-
-    # def link_paper_to_node(self, paper_identifier, node_label, node_identifier, relationship_type, paper_by_doi=True, node_prop_to_match="name"):
-    #     paper_match_prop = "doi" if paper_by_doi else "title"
-    #     query = f"""
-    #     MATCH (p:ResearchPaper {{{paper_match_prop}: $paper_id}})
-    #     MATCH (n:{node_label} {{{node_prop_to_match}: $node_id}})
-    #     MERGE (p)-[r:{relationship_type}]->(n)
-    #     RETURN type(r)
-    #     """
-    #     self._run_query(query, {"paper_id": paper_identifier, "node_id": node_identifier})
-    # This is a more generic way to handle some of the other relationships if the other node type is simple.
 ```
