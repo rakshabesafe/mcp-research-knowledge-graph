@@ -74,21 +74,51 @@ fastmcp run fastmcp_server.py:mcp_server
 This will typically start the server using `stdio` transport. To run it with HTTP transport (e.g., for testing with tools like `curl` or other HTTP-based MCP clients):
 
 ```bash
-fastmcp run fastmcp_server.py:mcp_server --transport http --port 8000
+fastmcp run fastmcp_server.py:mcp_server --transport http --host 0.0.0.0 --port 8000
 ```
 
 To run with Server-Sent Events (SSE) transport:
 ```bash
-fastmcp run fastmcp_server.py:mcp_server --transport sse # Default port for SSE might vary or be configured
+fastmcp run fastmcp_server.py:mcp_server --transport sse # Default port/path for SSE may vary
 ```
 
-Alternatively, you can run the server directly using Python for basic stdio operation (less flexible for choosing transport):
+To run with standard input/output (stdio) transport (often the default if `--transport` is omitted with `fastmcp run`):
 ```bash
-python fastmcp_server.py
+fastmcp run fastmcp_server.py:mcp_server --transport stdio
 ```
-(Make sure environment variables for Neo4j are set.)
 
-FastMCP supports `stdio` (default for `python ...` or `fastmcp run ...` without `--transport`), `http`, and `sse` transports. Using the `fastmcp run` command with the `--transport` flag is the recommended way to specify the desired transport.
+You can also run the server directly using `python fastmcp_server.py`, which will use the default transport specified in its `mcp_server.run()` call (currently stdio).
+
+Using the `fastmcp run` command with the `--transport` flag is generally the most flexible way to control the transport mechanism.
+
+### FastMCP Server Configuration
+
+The server's behavior and settings are configured in several ways:
+
+1.  **Neo4j Database Connection:**
+    *   Set these environment variables before starting the server:
+        *   `NEO4J_URI`: (Defaults to `bolt://localhost:7687`)
+        *   `NEO4J_USER`: (Defaults to `neo4j`)
+        *   `NEO4J_PASSWORD`: (Required, e.g., `your_secure_password`)
+    *   These are used by the `lifespan` manager in `fastmcp_server.py` to connect to your Neo4j instance.
+
+2.  **`FastMCP` Instance Settings (in `fastmcp_server.py`):**
+    *   **Server Name & Instructions:** Defined when `FastMCP(...)` is instantiated (e.g., `name="ResearchPaperKGProcessor"`).
+    *   **Dependencies:** Python package dependencies required for the server to run correctly in isolated environments (e.g., when deployed using `fastmcp install`) are listed in the `dependencies` argument of the `FastMCP` constructor. Our server lists `fastmcp`, `neo4j`, `spacy`, and `pydantic`.
+    *   **Lifespan Management:** The `@asynccontextmanager def lifespan(app: FastMCP)` function in `fastmcp_server.py` handles startup (Neo4j connection) and shutdown (Neo4j disconnection) logic.
+
+3.  **FastMCP Framework Global Settings:**
+    *   FastMCP offers global settings configurable via environment variables prefixed with `FASTMCP_` (e.g., `FASTMCP_LOG_LEVEL=DEBUG`).
+    *   Refer to the official FastMCP documentation for a complete list of these global settings.
+
+4.  **Transport-Specific Settings (with `fastmcp run`):**
+    *   When using `fastmcp run`, you can specify transport-related options like:
+        *   `--host <hostname>` (for HTTP/SSE)
+        *   `--port <port_number>` (for HTTP/SSE)
+        *   `--log-level <level>` (can override global log level for this run)
+    *   Consult `fastmcp run --help` and the FastMCP documentation for all available runtime options.
+
+For comprehensive details on all FastMCP configuration options, please refer to the [official FastMCP documentation](https://gofastmcp.com/).
 
 ## Interacting with the `ProcessPaperToKG` Tool
 
