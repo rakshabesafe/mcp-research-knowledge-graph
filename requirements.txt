@@ -1,13 +1,13 @@
 # Neo4j driver
-neo4j>=5.0.0,<6.0.0
+neo4j
 
 # For text processing
-spacy>=3.0.0,<4.0.0
+spacy
 # To download a spaCy model (run this command once after installing spacy):
 # python -m spacy download en_core_web_sm
 
 # FastMCP framework and Pydantic for data models
-fastmcp>=2.0.0,<3.0.0
-pydantic>=2.0.0,<3.0.0
+fastmcp
+pydantic
 
 # Add other dependencies as needed
